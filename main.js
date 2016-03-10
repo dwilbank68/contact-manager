@@ -6,8 +6,47 @@ var app = angular.module('codecraft', [
 	'angular-ladda',
 	'mgcrea.ngStrap',
     'toaster',
-    'ngAnimate'
+    'ngAnimate',
+	'ui.router'
 ]);
+
+app.config(function($stateProvider, $urlRouterProvider){
+	$stateProvider
+		.state('list', {
+			url: '/',
+			views: {
+				'main':{
+					templateUrl: 'templates/list.html',
+					controller: 'PersonListController'
+				},
+				'search':{
+                    templateUrl: 'templates/searchform.html',
+                    controller: 'PersonListController'
+				}
+			}
+		})
+		.state('edit', {
+			url: '/edit/:email',
+			views: {
+				'main':{
+					templateUrl: 'templates/edit.html',
+					controller: 'PersonDetailController'
+				}
+			}
+		})
+        .state('create', {
+            url: '/create',
+			views: {
+				'main':{
+					templateUrl: 'templates/edit.html',
+					controller: 'PersonCreateController'
+				}
+			}
+        });
+
+	$urlRouterProvider.otherwise('/');
+
+});
 
 app.config(function($httpProvider, $resourceProvider, laddaProvider, $datepickerProvider){
 	$httpProvider.defaults.headers.common['Authorization'] = 'Token 1119d3b36fea1a895abd39d1660636dc57d284ff'
@@ -26,6 +65,37 @@ app.factory('Contact', function($resource){
 		{update: {method:'PUT'}});
 });
 
+app.directive('ccSpinner', function(){
+    return {
+        'restrict':'AE',
+        'templateUrl':'templates/spinner.html',
+        'scope':{
+            'isLoading':'='
+        }
+    }
+})
+
+app.directive('ccCard', function(){
+    return {
+        'restrict':'AE',
+        'templateUrl':'templates/card.html',
+        'scope':{
+			'user': '='
+        },
+        'controller':function($scope, ContactService){
+            $scope.isDeleting = false;
+            $scope.deleteUser = function(){
+                $scope.isDeleting = true;
+                ContactService
+                    .removeContact($scope.user)
+                    .then(function(){
+                        $scope.isDeleting = false;
+                    })
+            }
+        }
+    }
+})
+
 app.filter('defaultImage', function(){
     return function(input, param){
         if (!input){
@@ -35,16 +105,27 @@ app.filter('defaultImage', function(){
     };
 });
 
-app.controller('PersonDetailController', function ($scope, ContactService) {
-	$scope.contacts = ContactService;
+app.controller('PersonDetailController', function ($scope, $state, $stateParams, ContactService) {
+
+    $scope.mode = 'Edit';
+    $scope.contacts = ContactService;
+    $scope.contacts.selectedPerson = ContactService.getPerson($stateParams.email);
 
 	$scope.save = function(){
-		ContactService.updateContact(ContactService.selectedPerson)
+		ContactService
+            .updateContact(ContactService.selectedPerson)
+            .then(function(){
+                $state.go('list');
+            });
 	};
 
-	$scope.remove = function(){
-		ContactService.removeContact(ContactService.selectedPerson)
-	};
+	//$scope.remove = function(){
+	//	ContactService
+     //       .removeContact(ContactService.selectedPerson)
+     //       .then(function(){
+     //           $state.go('list');
+     //       });
+	//};
 
 
 });
@@ -60,43 +141,35 @@ app.controller('PersonListController', function ($scope, $modal, ContactService)
 		$scope.contacts.loadMore();
 	};
 
-	$scope.showCreateModal = function(){
-        $scope.contacts.selectedPerson = {};
-		$scope.createModal = $modal({
-			scope: $scope,
-			template: 'templates/modal.create.tpl.html',
-			show: true
-		});
-	};
+});
 
-    $scope.createContact = function(){
+app.controller('PersonCreateController', function ($scope, $state, ContactService) {
+
+    $scope.mode = 'Create';
+
+    $scope.contacts = ContactService;
+
+    $scope.save = function(){
         console.log('createContact');
         ContactService
             .createContact($scope.contacts.selectedPerson)
             .then(function(){
-                $scope.createModal.hide();
+                $state.go('list');
             })
     };
 
-	$scope.$watch('search', function(newVal, oldVal){
-		if (angular.isDefined(newVal)) {
-			ContactService.doSearch(newVal);
-		}
-	});
-
-	$scope.$watch('order', function(newVal, oldVal){
-		if (angular.isDefined(newVal)) {
-			ContactService.doOrder(newVal);
-		}
-	})
-
 });
 
-app.service('ContactService', function (Contact, $q, toaster) {
+app.service('ContactService', function (Contact, $rootScope, $q, toaster) {
 
 	var self = {
-		'addPerson': function (person) {
-			this.persons.push(person);
+		'getPerson': function (email) {
+			for (var i=0; i<self.persons.length; i++){
+				var obj = self.persons[i];
+				if (obj.email == email){
+					return obj;
+				}
+			}
 		},
 		'page':1,
 		'hasMore':true,
@@ -105,18 +178,17 @@ app.service('ContactService', function (Contact, $q, toaster) {
 		'selectedPerson': null,
 		'persons': [],
 		'search': null,
-		'doSearch': function(search){
+        'ordering': 'name',
+		'doSearch': function(){
 			self.hasMore = true;
 			self.page = 1;
 			self.persons = [];
-			self.search = search;
 			self.loadContacts();
 		},
-		'doOrder': function(order){
+		'doOrder': function(){
 			self.hasMore = true;
 			self.page = 1;
 			self.persons = [];
-			self.ordering = order;
 			self.loadContacts();
 		},
 		'loadContacts':function(){
@@ -150,7 +222,8 @@ app.service('ContactService', function (Contact, $q, toaster) {
 			}
 		},
 		'updateContact': function(person){
-			console.log('Update');
+            var d = $q.defer();
+            console.log('Update');
 			self.isSaving = true;
 			Contact
 				.update(person)
@@ -158,10 +231,14 @@ app.service('ContactService', function (Contact, $q, toaster) {
 				.then(function(){
 					self.isSaving = false;
                     toaster.pop('success', 'Updated ' + person.name);
+                    d.resolve();
                 });
-		},
+            return d.promise;
+        },
 		'removeContact': function(person){
-			console.log('Remove');
+            var d = $q.defer();
+
+            console.log('Remove');
 			self.isDeleting = true;
 			person
 				.$remove()
@@ -171,8 +248,10 @@ app.service('ContactService', function (Contact, $q, toaster) {
 					self.persons.splice(idx, 1);
 					self.selectedPerson = null;
                     toaster.pop('success', 'Deleted ' + person.name);
-				});
-		},
+                    d.resolve();
+                });
+            return d.promise;
+        },
         'createContact': function(person){
             var d = $q.defer();
             self.isSaving = true;
@@ -190,10 +269,35 @@ app.service('ContactService', function (Contact, $q, toaster) {
                     d.resolve();
                 });
             return d.promise;
+        },
+        'watchFilters': function(){
+            console.log('watchFilters fired');
+            $rootScope
+                .$watch(
+                    function(){ return self.search; },
+                    function(newVal){
+                        if (angular.isDefined(newVal)) {
+                            console.log('search changed');
+                            self.doSearch();
+                        }
+                    }
+                );
+
+            $rootScope
+                .$watch(
+                    function(){ return self.ordering; },
+                    function(newVal){
+                        console.log('ordering changed');
+                        if (angular.isDefined(newVal)) {
+                            self.doOrder();
+                        }
+                    }
+                );
         }
 	};
 
 	self.loadContacts();
+	self.watchFilters();
 
 	return self;
 
